@@ -28,6 +28,14 @@ from fairseq.optim import lr_scheduler
 from fairseq.utils import safe_hasattr
 from omegaconf import OmegaConf
 
+from opacus import PrivacyEngine
+from opacus.layers import DifferentiallyPrivateDistributedDataParallel as DPDDP
+from scipy import optimize
+from prv_accountant import Accountant
+from fairseq.distributed import ModuleProxyWrapper
+from fairseq.dp_utils import register_grad_sampler_transformer_pg_embedding
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +49,7 @@ class Trainer(object):
     communication of the gradients across workers.
     """
 
-    def __init__(self, cfg: FairseqConfig, task, model, criterion, quantizer=None):
+    def __init__(self, cfg: FairseqConfig, task, model, criterion, quantizer=None, use_DP=True):
 
         if isinstance(cfg, Namespace):
             logger.warning(
@@ -51,6 +59,7 @@ class Trainer(object):
 
         self.cfg = cfg
         self.task = task
+        self.use_DP = use_DP
 
         # catalog shared parameters
         shared_params = _catalog_shared_params(model)
@@ -170,6 +179,42 @@ class Trainer(object):
         self._previous_training_time = 0
         self._cumulative_training_time = None
 
+        if self.use_DP:
+            register_grad_sampler_transformer_pg_embedding()
+            logger.info("training using opacus for DP")
+            gradient_accumulation_steps = 16
+            # using opacus with DDP instead of DPDDP so grad_norm has to be vector
+            per_sample_max_grad_norm = 1.0
+            n_layers = len(
+                [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+            )
+            max_grad_norm_vector = [
+                per_sample_max_grad_norm/ np.sqrt(n_layers)
+            ] * n_layers
+            self.task.load_dataset(self.cfg.dataset.train_subset)
+            per_device_train_batch_size = 16 #self.cfg.dataset.batch_size #TODO: find correct value
+            train_dataset_size = len(self.task.dataset(self.cfg.dataset.train_subset)) #TODO: find correct value
+            sampling_probability = per_device_train_batch_size*self.cfg.distributed_training.distributed_world_size*gradient_accumulation_steps/train_dataset_size  #TODO: find correct value traing.args_world_size, 
+            max_epoch = 16#self.cfg.optimization.max_epoch) #TODO: compute max epoch
+            num_steps = int(max_epoch*(1/sampling_probability+1)) #TODO: add correct value for number for train_args.num_train_epochs
+            noise_multiplier = _find_noise_multiplier(
+                sampling_probability=sampling_probability,
+                num_steps=num_steps,
+                target_delta=1.0/train_dataset_size,
+                target_epsilon=8 #privacy_args.target_epsilon
+            )
+            self.privacy_engine = PrivacyEngine(
+                module=self.model.module,
+                batch_size=per_device_train_batch_size*gradient_accumulation_steps,
+                sample_size=train_dataset_size,
+                max_grad_norm=max_grad_norm_vector,
+                noise_multiplier=noise_multiplier,
+                secure_rng=True,
+                target_delta=1.0/train_dataset_size
+            )
+            self.privacy_engine.to(self.device)
+            self.privacy_engine.attach(self.optimizer.optimizer) # change this to self.optimizer.optmizer
+
     def reinitialize(self):
         """Reinitialize the Trainer, typically after model params change."""
         self._lr_scheduler = None
@@ -251,12 +296,19 @@ class Trainer(object):
     def model(self):
         if self._wrapped_model is None:
             if self.use_distributed_wrapper:
-                self._wrapped_model = models.DistributedFairseqModel(
-                    self.cfg.distributed_training,
-                    self._model,
-                    process_group=self.data_parallel_process_group,
-                    device=self.device,
-                )
+                
+                if self.use_DP:
+                    logger.info("using DPDDP for distributed training")
+                    self._wrapped_model = DPDDP(self._model.to(self.device))
+                    self._wrapped_model = ModuleProxyWrapper(self._wrapped_model)
+                else:
+                    logger.info("NOT using OPACUS for distributed training")
+                    self._wrapped_model = models.DistributedFairseqModel(
+                        self.cfg.distributed_training,
+                        self._model,
+                        process_group=self.data_parallel_process_group,
+                        device=self.device,
+                    )
             else:
                 self._wrapped_model = self._model
         return self._wrapped_model
@@ -782,6 +834,8 @@ class Trainer(object):
                         ignore_grad=is_dummy_batch,
                         **extra_kwargs,
                     )
+                    if self.use_DP:
+                        self.privacy_engine.virtual_step()
                     del loss
 
                 logging_outputs.append(logging_output)
@@ -872,12 +926,16 @@ class Trainer(object):
                 # TPU object. The assumption is that the gradient itself is also 0.
 
             with torch.autograd.profiler.record_function("clip-grads"):
-                # clip grads
-                grad_norm = self.clip_grad_norm(self.cfg.optimization.clip_norm)
+                if self.use_DP:
+                    #opacus already clips grads
+                    grad_norm = None
+                else:
+                    # clip grads
+                    grad_norm = self.clip_grad_norm(self.cfg.optimization.clip_norm)
 
             # check that grad norms are consistent across workers
             # on tpu check tensor is slow
-            if not self.tpu:
+            if not self.tpu and not self.use_DP:
                 if (
                     not self.cfg.optimization.use_bmuf
                     and self.cfg.distributed_training.ddp_backend != "slowmo"
@@ -1529,3 +1587,41 @@ def _set_module_by_path(module, path, value):
     for name in path[:-1]:
         module = getattr(module, name)
     setattr(module, path[-1], value)
+
+def _find_noise_multiplier(sampling_probability: float, num_steps: int, target_epsilon: float, target_delta: float, eps_error: float=0.1) -> float:
+    """
+    Find a noise multiplier that satisfies a given target epsilon for Differential Privacy.
+    """
+    def compute_epsilon(mu: float) -> float:
+        acc = Accountant(
+            noise_multiplier=mu,
+            sampling_probability=sampling_probability,
+            delta=target_delta,
+            max_compositions=num_steps,
+            eps_error=eps_error/2
+        )
+        return acc.compute_epsilon(num_steps)
+
+    mu_L = 1.0
+    eps_L = compute_epsilon(mu_L)[2]
+    while eps_L < target_epsilon:
+        mu_L /= 1.2
+        eps_L = compute_epsilon(mu_L)[0]
+
+    mu_R = mu_L
+    eps_R = eps_L
+    while eps_R > target_epsilon:
+        mu_R *= 1.2
+        eps_R = compute_epsilon(mu_R)[2]
+
+
+    has_converged = False 
+    bracket = [mu_L, mu_R]
+    while not has_converged:
+        mu_err = (bracket[1]-bracket[0])*0.01
+        mu_guess = optimize.root_scalar(lambda mu: compute_epsilon(mu)[2]-target_epsilon, bracket=bracket, xtol=mu_err).root
+        bracket = [mu_guess-mu_err, mu_guess+mu_err]
+        eps_up = compute_epsilon(mu_guess-mu_err)[2]
+        eps_low = compute_epsilon(mu_guess+mu_err)[0]
+        has_converged = (eps_up - eps_low) < 2*eps_error
+    return bracket[1]
