@@ -15,7 +15,6 @@ from fairseq.modules.quant_noise import quant_noise
 from torch import Tensor, nn
 from torch.nn import Parameter
 
-
 @with_incremental_state
 class MultiheadAttention(nn.Module):
     """Multi-headed attention.
@@ -86,7 +85,7 @@ class MultiheadAttention(nn.Module):
 
         self.reset_parameters()
 
-        self.onnx_trace = False
+        self.onnx_trace = True
         self.skip_embed_dim_check = False
 
     def prepare_for_onnx_export_(self):

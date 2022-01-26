@@ -197,19 +197,25 @@ class Trainer(object):
             sampling_probability = per_device_train_batch_size*self.cfg.distributed_training.distributed_world_size*gradient_accumulation_steps/train_dataset_size  #TODO: find correct value traing.args_world_size, 
             max_epoch = 16#self.cfg.optimization.max_epoch) #TODO: compute max epoch
             num_steps = int(max_epoch*(1/sampling_probability+1)) #TODO: add correct value for number for train_args.num_train_epochs
-            noise_multiplier = _find_noise_multiplier(
+            logger.info("sampling_probability {}".format(sampling_probability))
+            logger.info("num_steps {}".format(num_steps))
+            logger.info("train_dataset_size {}".format(train_dataset_size))
+            # TODO: change this values and avoid error "Discrete mean differs from continuous mean significantly" with privacy accountant
+            """
+            noise_multiplier  = _find_noise_multiplier(
                 sampling_probability=sampling_probability,
                 num_steps=num_steps,
-                target_delta=1.0/train_dataset_size,
+                target_delta=1.0/train_dataset_size, 
                 target_epsilon=8 #privacy_args.target_epsilon
             )
+            """
+            noise_multiplier = 0.5
             self.privacy_engine = PrivacyEngine(
                 module=self.model.module,
                 batch_size=per_device_train_batch_size*gradient_accumulation_steps,
                 sample_size=train_dataset_size,
                 max_grad_norm=max_grad_norm_vector,
                 noise_multiplier=noise_multiplier,
-                secure_rng=True,
                 target_delta=1.0/train_dataset_size
             )
             self.privacy_engine.to(self.device)
