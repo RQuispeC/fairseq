@@ -183,14 +183,9 @@ class Trainer(object):
             register_grad_sampler_transformer_pg_embedding()
             logger.info("training using opacus for DP")
             gradient_accumulation_steps = 16
-            # using opacus with DDP instead of DPDDP so grad_norm has to be vector
+            # gradient accumulation only works with Opacus DPDDP
             per_sample_max_grad_norm = 1.0
-            n_layers = len(
-                [(n, p) for n, p in model.named_parameters() if p.requires_grad]
-            )
-            max_grad_norm_vector = [
-                per_sample_max_grad_norm/ np.sqrt(n_layers)
-            ] * n_layers
+
             self.task.load_dataset(self.cfg.dataset.train_subset)
             per_device_train_batch_size = 16 #self.cfg.dataset.batch_size #TODO: find correct value
             train_dataset_size = len(self.task.dataset(self.cfg.dataset.train_subset)) #TODO: find correct value
@@ -210,11 +205,15 @@ class Trainer(object):
             )
             """
             noise_multiplier = 0.5
+            if self.data_parallel_world_size > 1:
+                dp_module = self.model.module
+            else:
+                dp_module = self.model
             self.privacy_engine = PrivacyEngine(
-                module=self.model.module,
+                module=dp_module,
                 batch_size=per_device_train_batch_size*gradient_accumulation_steps,
                 sample_size=train_dataset_size,
-                max_grad_norm=max_grad_norm_vector,
+                max_grad_norm=per_sample_max_grad_norm,
                 noise_multiplier=noise_multiplier,
                 target_delta=1.0/train_dataset_size
             )
@@ -304,8 +303,12 @@ class Trainer(object):
             if self.use_distributed_wrapper:
                 
                 if self.use_DP:
-                    logger.info("using DPDDP for distributed training")
-                    self._wrapped_model = DPDDP(self._model.to(self.device))
+                    if self.data_parallel_world_size > 1:
+                        logger.info("using Opacus DPDDP for distributed training")
+                        self._wrapped_model = DPDDP(self._model.to(self.device))
+                    else:
+                        logger.info("using Opacus DP for single GPU training")
+                        self._wrapped_model = self._model.to(self.device)
                     self._wrapped_model = ModuleProxyWrapper(self._wrapped_model)
                 else:
                     logger.info("NOT using OPACUS for distributed training")
