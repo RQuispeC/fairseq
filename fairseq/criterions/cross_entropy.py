@@ -12,6 +12,8 @@ from fairseq.criterions import FairseqCriterion, register_criterion
 from fairseq.dataclass import FairseqDataclass
 from omegaconf import II
 
+import torch
+
 
 @dataclass
 class CrossEntropyCriterionConfig(FairseqDataclass):
@@ -23,6 +25,7 @@ class CrossEntropyCriterion(FairseqCriterion):
     def __init__(self, task, sentence_avg):
         super().__init__(task)
         self.sentence_avg = sentence_avg
+        self.CE = torch.nn.CrossEntropyLoss()
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -46,15 +49,18 @@ class CrossEntropyCriterion(FairseqCriterion):
         return loss, sample_size, logging_output
 
     def compute_loss(self, model, net_output, sample, reduce=True):
-        lprobs = model.get_normalized_probs(net_output, log_probs=True)
-        lprobs = lprobs.view(-1, lprobs.size(-1))
-        target = model.get_targets(sample, net_output).view(-1)
-        loss = F.nll_loss(
-            lprobs,
-            target,
-            ignore_index=self.padding_idx,
-            reduction="sum" if reduce else "none",
-        )
+        probs = net_output[0].transpose(2, 1)
+        target = sample["target"]
+        loss = self.CE(probs, target)
+        # lprobs = model.get_normalized_probs(net_output, log_probs=True)
+        # lprobs = lprobs.view(-1, lprobs.size(-1))
+        # target = model.get_targets(sample, net_output).view(-1)
+        # loss = F.nll_loss(
+        #     lprobs,
+        #     target,
+        #     ignore_index=self.padding_idx,
+        #     reduction="sum" if reduce else "none",
+        # )
         return loss, loss
 
     @staticmethod
