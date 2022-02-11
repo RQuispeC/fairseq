@@ -5,7 +5,6 @@ import torch
 import examples.pointer_generator.pointer_generator_src.transformer_pg as transformer_pg
 
 from opacus.grad_sample.utils import create_or_accumulate_grad_sample, register_grad_sampler
-from opacus.grad_sample import utils
 
 
 @register_grad_sampler(transformer_pg.Embedding)
@@ -39,6 +38,3 @@ def compute_embedding_grad_sample(
     torch.backends.cudnn.deterministic = saved
 
     create_or_accumulate_grad_sample(layer.weight, grad_sample, batch_dim)
-
-def register_grad_sampler_transformer_pg_embedding() -> None:
-    utils.register_grad_sampler(transformer_pg.Embedding)(compute_embedding_grad_sample)

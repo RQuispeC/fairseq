@@ -33,7 +33,7 @@ from opacus.layers import DifferentiallyPrivateDistributedDataParallel as DPDDP
 from scipy import optimize
 from prv_accountant import Accountant
 from fairseq.distributed import ModuleProxyWrapper
-from fairseq.dp_utils import register_grad_sampler_transformer_pg_embedding
+import examples.pointer_generator.pointer_generator_src.transformer_pg as transformer_pg
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ class Trainer(object):
         self._cumulative_training_time = None
 
         if self.use_DP:
-            register_grad_sampler_transformer_pg_embedding()
+            from fairseq import dp_utils  # Registers grad sampler for transformer_pg.Embedding layer
             logger.info("training using opacus for DP")
 
             self.task.load_dataset(self.cfg.dataset.train_subset)
