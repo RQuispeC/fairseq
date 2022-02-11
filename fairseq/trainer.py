@@ -182,19 +182,19 @@ class Trainer(object):
         if self.use_DP:
             register_grad_sampler_transformer_pg_embedding()
             logger.info("training using opacus for DP")
-            gradient_accumulation_steps = 16
-            # gradient accumulation only works with Opacus DPDDP
-            per_sample_max_grad_norm = 1.0
 
             self.task.load_dataset(self.cfg.dataset.train_subset)
             per_device_train_batch_size = 16 #self.cfg.dataset.batch_size #TODO: find correct value
+            # gradient accumulation only works with Opacus DPDDP
+            gradient_accumulation_steps = 16 #TODO: find correct value
             train_dataset_size = len(self.task.dataset(self.cfg.dataset.train_subset)) #TODO: find correct value
-            sampling_probability = per_device_train_batch_size*self.cfg.distributed_training.distributed_world_size*gradient_accumulation_steps/train_dataset_size  #TODO: find correct value traing.args_world_size, 
-            max_epoch = 16#self.cfg.optimization.max_epoch) #TODO: compute max epoch
-            num_steps = int(max_epoch*(1/sampling_probability+1)) #TODO: add correct value for number for train_args.num_train_epochs
-            logger.info("sampling_probability {}".format(sampling_probability))
-            logger.info("num_steps {}".format(num_steps))
-            logger.info("train_dataset_size {}".format(train_dataset_size))
+
+            # sampling_probability = per_device_train_batch_size*self.cfg.distributed_training.distributed_world_size*gradient_accumulation_steps/train_dataset_size  #TODO: find correct value traing.args_world_size, 
+            # max_epoch = 16#self.cfg.optimization.max_epoch) #TODO: compute max epoch
+            # num_steps = int(max_epoch*(1/sampling_probability+1)) #TODO: add correct value for number for train_args.num_train_epochs
+            # logger.info("sampling_probability {}".format(sampling_probability))
+            # logger.info("num_steps {}".format(num_steps))
+            # logger.info("train_dataset_size {}".format(train_dataset_size))
             # TODO: change this values and avoid error "Discrete mean differs from continuous mean significantly" with privacy accountant
             """
             noise_multiplier  = _find_noise_multiplier(
@@ -204,19 +204,25 @@ class Trainer(object):
                 target_epsilon=8 #privacy_args.target_epsilon
             )
             """
+
+            per_sample_max_grad_norm = 1.0
             noise_multiplier = 0.5
+
             if self.data_parallel_world_size > 1:
                 dp_module = self.model.module
             else:
                 dp_module = self.model
+
             self.privacy_engine = PrivacyEngine(
                 module=dp_module,
                 batch_size=per_device_train_batch_size*gradient_accumulation_steps,
                 sample_size=train_dataset_size,
                 max_grad_norm=per_sample_max_grad_norm,
                 noise_multiplier=noise_multiplier,
-                target_delta=1.0/train_dataset_size
+                target_delta=1.0/train_dataset_size,
+                batch_first=False
             )
+
             self.privacy_engine.to(self.device)
             self.privacy_engine.attach(self.optimizer.optimizer) # change this to self.optimizer.optmizer
 
@@ -843,7 +849,10 @@ class Trainer(object):
                         ignore_grad=is_dummy_batch,
                         **extra_kwargs,
                     )
-                    if self.use_DP:
+                    # for n, p in self.model.named_parameters():
+                    #     print(n, p.grad_sample.shape)
+                    # raise Exception("One step forward/backward done")
+                    if self.use_DP and i < len(samples) - 1:
                         self.privacy_engine.virtual_step()
                     del loss
 
