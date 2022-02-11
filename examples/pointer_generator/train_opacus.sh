@@ -5,7 +5,7 @@ max_tokens=256
 update_freq=4
 pointer_layer=-2
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+CUDA_VISIBLE_DEVICES=0 \
     fairseq-train examples/pointer_generator/bin \
     --max-tokens "$max_tokens" \
     --task translation \

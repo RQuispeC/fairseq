@@ -43,8 +43,8 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
     if reduce:
-        nll_loss = nll_loss.sum()
-        smooth_loss = smooth_loss.sum()
+        nll_loss = nll_loss.mean()
+        smooth_loss = smooth_loss.mean()
     eps_i = epsilon / (lprobs.size(-1) - 1)
     loss = (1.0 - epsilon - eps_i) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss

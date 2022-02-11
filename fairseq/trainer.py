@@ -33,7 +33,7 @@ from opacus.layers import DifferentiallyPrivateDistributedDataParallel as DPDDP
 from scipy import optimize
 from prv_accountant import Accountant
 from fairseq.distributed import ModuleProxyWrapper
-from fairseq.dp_utils import register_grad_sampler_transformer_pg_embedding
+import examples.pointer_generator.pointer_generator_src.transformer_pg as transformer_pg
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -180,26 +180,21 @@ class Trainer(object):
         self._cumulative_training_time = None
 
         if self.use_DP:
-            register_grad_sampler_transformer_pg_embedding()
+            from fairseq import dp_utils  # Registers grad sampler for transformer_pg.Embedding layer
             logger.info("training using opacus for DP")
-            gradient_accumulation_steps = 16
-            # using opacus with DDP instead of DPDDP so grad_norm has to be vector
-            per_sample_max_grad_norm = 1.0
-            n_layers = len(
-                [(n, p) for n, p in model.named_parameters() if p.requires_grad]
-            )
-            max_grad_norm_vector = [
-                per_sample_max_grad_norm/ np.sqrt(n_layers)
-            ] * n_layers
+
             self.task.load_dataset(self.cfg.dataset.train_subset)
             per_device_train_batch_size = 16 #self.cfg.dataset.batch_size #TODO: find correct value
+            # gradient accumulation only works with Opacus DPDDP
+            gradient_accumulation_steps = 16 #TODO: find correct value
             train_dataset_size = len(self.task.dataset(self.cfg.dataset.train_subset)) #TODO: find correct value
-            sampling_probability = per_device_train_batch_size*self.cfg.distributed_training.distributed_world_size*gradient_accumulation_steps/train_dataset_size  #TODO: find correct value traing.args_world_size, 
-            max_epoch = 16#self.cfg.optimization.max_epoch) #TODO: compute max epoch
-            num_steps = int(max_epoch*(1/sampling_probability+1)) #TODO: add correct value for number for train_args.num_train_epochs
-            logger.info("sampling_probability {}".format(sampling_probability))
-            logger.info("num_steps {}".format(num_steps))
-            logger.info("train_dataset_size {}".format(train_dataset_size))
+
+            # sampling_probability = per_device_train_batch_size*self.cfg.distributed_training.distributed_world_size*gradient_accumulation_steps/train_dataset_size  #TODO: find correct value traing.args_world_size, 
+            # max_epoch = 16#self.cfg.optimization.max_epoch) #TODO: compute max epoch
+            # num_steps = int(max_epoch*(1/sampling_probability+1)) #TODO: add correct value for number for train_args.num_train_epochs
+            # logger.info("sampling_probability {}".format(sampling_probability))
+            # logger.info("num_steps {}".format(num_steps))
+            # logger.info("train_dataset_size {}".format(train_dataset_size))
             # TODO: change this values and avoid error "Discrete mean differs from continuous mean significantly" with privacy accountant
             """
             noise_multiplier  = _find_noise_multiplier(
@@ -209,15 +204,25 @@ class Trainer(object):
                 target_epsilon=8 #privacy_args.target_epsilon
             )
             """
+
+            per_sample_max_grad_norm = 1.0
             noise_multiplier = 0.5
+
+            if self.data_parallel_world_size > 1:
+                dp_module = self.model.module
+            else:
+                dp_module = self.model
+
             self.privacy_engine = PrivacyEngine(
-                module=self.model.module,
+                module=dp_module,
                 batch_size=per_device_train_batch_size*gradient_accumulation_steps,
                 sample_size=train_dataset_size,
-                max_grad_norm=max_grad_norm_vector,
+                max_grad_norm=per_sample_max_grad_norm,
                 noise_multiplier=noise_multiplier,
-                target_delta=1.0/train_dataset_size
+                target_delta=1.0/train_dataset_size,
+                batch_first=False
             )
+
             self.privacy_engine.to(self.device)
             self.privacy_engine.attach(self.optimizer.optimizer) # change this to self.optimizer.optmizer
 
@@ -304,8 +309,12 @@ class Trainer(object):
             if self.use_distributed_wrapper:
                 
                 if self.use_DP:
-                    logger.info("using DPDDP for distributed training")
-                    self._wrapped_model = DPDDP(self._model.to(self.device))
+                    if self.data_parallel_world_size > 1:
+                        logger.info("using Opacus DPDDP for distributed training")
+                        self._wrapped_model = DPDDP(self._model.to(self.device))
+                    else:
+                        logger.info("using Opacus DP for single GPU training")
+                        self._wrapped_model = self._model.to(self.device)
                     self._wrapped_model = ModuleProxyWrapper(self._wrapped_model)
                 else:
                     logger.info("NOT using OPACUS for distributed training")
@@ -840,7 +849,10 @@ class Trainer(object):
                         ignore_grad=is_dummy_batch,
                         **extra_kwargs,
                     )
-                    if self.use_DP:
+                    # for n, p in self.model.named_parameters():
+                    #     print(n, p.grad_sample.shape)
+                    # raise Exception("One step forward/backward done")
+                    if self.use_DP and i < len(samples) - 1:
                         self.privacy_engine.virtual_step()
                     del loss
 
