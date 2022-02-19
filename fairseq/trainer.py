@@ -220,7 +220,8 @@ class Trainer(object):
                 max_grad_norm=per_sample_max_grad_norm,
                 noise_multiplier=noise_multiplier,
                 target_delta=1.0/train_dataset_size,
-                batch_first=False
+                batch_first=False,
+                loss_reduction="sum"
             )
 
             self.privacy_engine.to(self.device)
@@ -751,6 +752,7 @@ class Trainer(object):
             max_positions=utils.resolve_max_positions(
                 self.task.max_positions(),
                 self.model.max_positions(),
+                self.cfg.dataset.max_tokens,
             ),
             ignore_invalid_inputs=self.cfg.dataset.skip_invalid_size_inputs_valid_test,
             required_batch_size_multiple=self.cfg.dataset.required_batch_size_multiple,
