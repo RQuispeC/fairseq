@@ -1,8 +1,4 @@
 /tests
 /scripts
 /docs
-/examples/!(pointer_generator)
-/examples/pointer_generator/bin
-/examples/pointer_generator/*.src
-/examples/pointer_generator/*.tgt
-/examples/pointer_generator/*.txt
+/examples

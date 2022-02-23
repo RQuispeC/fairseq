@@ -31,9 +31,9 @@ from omegaconf import OmegaConf
 from opacus import PrivacyEngine
 from opacus.layers import DifferentiallyPrivateDistributedDataParallel as DPDDP
 from scipy import optimize
-from prv_accountant import Accountant
+#from prv_accountant import Accountant
 from fairseq.distributed import ModuleProxyWrapper
-import examples.pointer_generator.pointer_generator_src.transformer_pg as transformer_pg
+import fairseq.pointer_generator.transformer_pg as transformer_pg
 import numpy as np
 
 logger = logging.getLogger(__name__)

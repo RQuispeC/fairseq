@@ -218,7 +218,7 @@ def do_setup(package_data):
             'numpy; python_version>="3.7"',
             "regex",
             "sacrebleu>=1.4.12",
-            "torch",
+            "torch==1.9.1",
             "tqdm",
             "bitarray",
             "torchaudio>=0.8.0",

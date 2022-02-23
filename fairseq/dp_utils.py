@@ -2,7 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import torch
-import examples.pointer_generator.pointer_generator_src.transformer_pg as transformer_pg
+import fairseq.pointer_generator.transformer_pg as transformer_pg
 
 from opacus.grad_sample.utils import create_or_accumulate_grad_sample, register_grad_sampler
 
