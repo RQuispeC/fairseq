@@ -1,0 +1,80 @@
+description: fairseq-text-summarization
+
+target:
+  service: amlk8s
+  name: itphyperdgx2cl1
+  vc: hai7a
+
+environment:
+  registry: mcr.microsoft.com
+  image: mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.1-cudnn8-ubuntu18.04:latest
+  setup:
+    - pip install . --user
+    #- pip install torch==1.9.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html --user
+    - pip install opacus==0.15.0 --user
+
+storage:
+  input_path:
+    # You should use Huseyin's blob here, or ask him for his files
+    storage_account_name: huinan
+    container_name: amulet
+  output_path:
+    # You should use your own blob here
+    storage_account_name: huinan
+    container_name: amulet
+
+code:
+  local_dir: $CONFIG_DIR/../../
+
+search:
+  job_template:
+    # To change: GPT2S (small), gpus16 (16 GPUs being used)
+    name: fairseq-pointer_generator-16v100_{experiment_name:s}_{auto:4s}
+    sku: 32G16-V100
+    command:
+      - CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 fairseq-train /mnt/input_path/fairseq_pointer_generator/bin
+        --max-tokens {max_tokens}
+        --task translation
+        --source-lang src 
+        --target-lang tgt
+        --truncate-source
+        --layernorm-embedding
+        --share-all-embeddings
+        --encoder-normalize-before
+        --decoder-normalize-before
+        --required-batch-size-multiple 1
+        --arch transformer_pointer_generator
+        --alignment-layer {pointer_layer}
+        --alignment-heads 1
+        --source-position-markers 1000
+        --criterion label_smoothed_cross_entropy
+        --label-smoothing 0.1
+        --dropout 0.1 
+        --attention-dropout 0.1
+        --weight-decay 0.01 
+        --optimizer adam 
+        --adam-betas "(0.9, 0.999)" 
+        --adam-eps 1e-08
+        --clip-norm 0.1
+        --lr-scheduler inverse_sqrt 
+        --lr {lr} 
+        --max-update {total_updates} 
+        --warmup-updates {warmup_updates}
+        --update-freq {update_freq}
+        --skip-invalid-size-inputs-valid-test
+        --no-save
+  type: grid
+  max_trials: 1
+  params:
+    - name: total_updates
+      values: choice(20000)
+    - name: warmup_updates
+      values: choice(500)
+    - name: lr
+      values: choice(0.001)
+    - name: max_tokens
+      values: choice(256)
+    - name: update_freq
+      values: choice(4)
+    - name: pointer_layer
+      values: choice(-2)
